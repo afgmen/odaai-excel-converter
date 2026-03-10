@@ -661,7 +661,7 @@ const TASK_SCHEMAS = {
       { oda: 'Source', aliases: ['source', 'nguồn'], required: false, default: 'Internal' },
       { oda: "Supplier's Name", aliases: ['supplier', 'nhà cung cấp', 'ncc', 'source.name', 'an thinh phat'], required: false },
       { oda: "Supplier's Price", aliases: ["supplier's price", 'giá nhập', 'buy price', 'giá trước vat', 'price excl. vat', 'price excl vat', 'old price'], required: false },
-      { oda: "Supplier's VAT", aliases: ["supplier's vat", 'vat%', 'vat %', 'vat', 'thuế'], required: false },
+      { oda: "Supplier's VAT", aliases: ["supplier's vat", 'vat%', 'vat %'], required: false },
       { oda: 'Selling Price (Required)', aliases: ['selling price', 'giá bán', 'giá sau vat', 'price incl. vat', 'price incl vat', 'giá', 'price', 'july (incl.vat)', 'đơn giá'], required: true },
       { oda: 'Selling VAT (Required)', aliases: ['selling vat'], required: true, default: '0' },
       { oda: 'UoM', aliases: ['uom', 'uom (required)', 'đvt', 'đơn vị', 'unit', 'dvt', 'đơn vị/ unit', 'đơn vị/unit'], required: false },
@@ -819,7 +819,7 @@ function isChoDeli() {
   // Check first sheet has STT column
   const ws = workbook.Sheets[sheets[0]];
   const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-  return raw.slice(0, 15).some(r => r.some(c => String(c).trim() === 'STT'));
+  return raw.slice(0, 15).some(r => r.length > 1 && String(r[1] || '').trim() === 'STT');
 }
 
 function loadSheet() {
@@ -875,23 +875,14 @@ function loadChoDeliAllSheets() {
   workbook.SheetNames.forEach(sn => {
     const ws = workbook.Sheets[sn];
     const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-    const hIdx = raw.findIndex((r, i) => i < 15 && r.some(c => String(c).trim() === 'STT'));
+    // Find the header row where col[1] === 'STT' (left-table anchor)
+    const hIdx = raw.findIndex((r, i) => i < 15 && r.length > 1 && String(r[1] || '').trim() === 'STT');
     if (hIdx < 0) return;
     sheetsLoaded++;
     raw.slice(hIdx + 1).forEach(row => {
-      // Left table
-      if (row.length > IDX.name && typeof row[IDX.stt] === 'number' && row[IDX.name]) {
-        combined.push([
-          row[IDX.stt] ?? '', row[IDX.cat] ?? '', row[IDX.name] ?? '',
-          row[IDX.oldPrice] ?? '', row[IDX.newPrice] ?? '', row[IDX.uom] ?? ''
-        ]);
-      }
-      // Right table (mirrored)
-      if (row.length > IDX_R.name && typeof row[IDX_R.stt] === 'number' && row[IDX_R.name]) {
-        combined.push([
-          row[IDX_R.stt] ?? '', row[IDX_R.cat] ?? '', row[IDX_R.name] ?? '',
-          row[IDX_R.oldPrice] ?? '', row[IDX_R.newPrice] ?? '', row[IDX_R.uom] ?? ''
-        ]);
+      // Left table: col1=STT, col2=Cat, col3=Name, col4=GiáCũ, col5=GiáMới, col6=ĐVT
+      if (row.length > 3 && typeof row[1] === 'number' && row[3]) {
+        combined.push([row[1] ?? '', row[2] ?? '', row[3] ?? '', row[4] ?? '', row[5] ?? '', row[6] ?? '']);
       }
     });
   });
@@ -951,7 +942,9 @@ function buildMapping() {
     // Normalize header for matching
     currentHeaders.forEach((h, idx) => {
       const norm = String(h).toLowerCase().trim().replace(/[\n\r]/g, ' ').replace(/\s+/g, ' ');
+      if (!norm) return; // Fix: skip empty headers (Bug B — V-Garden blank col0)
       for (const alias of col.aliases) {
+        if (!alias) return;
         if (norm === alias || norm.includes(alias) || alias.includes(norm)) {
           if (!found) { found = h; foundIdx = idx; }
         }
@@ -1048,11 +1041,12 @@ function parseVatValue(val) {
   // Vietnamese
   if (s === 'không' || s === 'không vat' || s === 'no') return 0;
   if (s === 'có' || s === 'yes') return 10;
-  // Already numeric
-  const n = parseFloat(val);
+  // Strip trailing % sign (e.g. "5%" → 5, "10%" → 10) — Fix: V-Garden VAT column
+  const stripped = s.replace(/%$/, '').trim();
+  const n = parseFloat(stripped);
   if (!isNaN(n)) {
     // If expressed as decimal (e.g. 0.1), convert to percent
-    return n <= 1 ? Math.round(n * 100) : n;
+    return n <= 1 ? Math.round(n * 100) : Math.round(n);
   }
   return 0;
 }
