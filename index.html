@@ -694,12 +694,12 @@ const TASK_SCHEMAS = {
     startRow: 9,
     columns: [
       { oda: 'ProductID', aliases: ['productid', 'product id', 'id', 'oda id'], required: false },
-      { oda: 'SKU', aliases: ['sku', 'item code', 'code', 'supplier items list report', 'column2'], required: false },
-      { oda: 'Product name "Primary language" (Required)', aliases: ['name', 'product name', 'item name', 'tên'], required: true },
-      { oda: "Supplier's Name", aliases: ['supplier', 'source.name', 'ncc'], required: false },
-      { oda: "Supplier's Price", aliases: ['buy price', 'giá nhập', 'price', 'column8'], required: false },
-      { oda: "Supplier's VAT", aliases: ['vat', 'thuế'], required: false, default: '0' },
-      { oda: 'Selling Price (Required)', aliases: ['selling price', 'giá bán'], required: true },
+      { oda: 'SKU', aliases: ['sku', 'item code', 'code', 'column3', 'mã sản phẩm'], required: false },
+      { oda: 'Product name "Primary language" (Required)', aliases: ['name', 'product name', 'item name', 'tên', 'column2'], required: true },
+      { oda: "Supplier's Name", aliases: ['supplier', 'source.name', 'ncc', 'nhà cung cấp'], required: false },
+      { oda: "Supplier's Price", aliases: ['buy price', 'giá nhập', 'column8', 'price excl', 'giá trước vat'], required: false },
+      { oda: "Supplier's VAT", aliases: ['vat', 'thuế', 'vat%'], required: false, default: '0' },
+      { oda: 'Selling Price (Required)', aliases: ['selling price', 'giá bán', 'price incl', 'giá sau vat'], required: true, default: '' },
       { oda: 'Selling VAT (Required)', aliases: ['selling vat'], required: true, default: '0' },
     ]
   },
@@ -709,9 +709,9 @@ const TASK_SCHEMAS = {
     columns: [
       { oda: 'Pricelist Name', aliases: ['price list name', 'pricelist', 'bảng giá'], required: false },
       { oda: 'Product ID (Hidden this column)', aliases: ['item code', 'code', 'product id', 'id'], required: false },
-      { oda: 'Product name (Primary language)', aliases: ['item name', 'tên', 'name', '적용단가', 'product name'], required: true },
-      { oda: 'VAT (%)', aliases: ['vat', 'vat포함여부', 'thuế'], required: false, default: '0' },
-      { oda: 'Price', aliases: ['price', '적용단가', 'giá', 'đơn giá'], required: true },
+      { oda: 'Product name (Primary language)', aliases: ['item name', 'tên', 'name', 'product name'], required: true },
+      { oda: 'VAT (%)', aliases: ['vat', 'vat포함여부', 'thuế', 'vat%'], required: false, default: '0' },
+      { oda: 'Price', aliases: ['price', '적용단가', 'giá', 'đơn giá', 'unit price', 'đơn giá bán'], required: true },
     ]
   }
 };
@@ -958,6 +958,42 @@ function runConvert() {
   }, 100);
 }
 
+// Bug 4 helper: convert VAT flag text (Korean/Vietnamese) to numeric %
+function parseVatValue(val) {
+  if (val === null || val === undefined || val === '') return 0;
+  const s = String(val).trim().toLowerCase();
+  // Korean: 미포함 = not included (0%), 포함 = included
+  if (s === '미포함' || s === '불포함') return 0;
+  if (s === '포함') return 10; // assume 10% VAT if included
+  // Vietnamese
+  if (s === 'không' || s === 'không vat' || s === 'no') return 0;
+  if (s === 'có' || s === 'yes') return 10;
+  // Already numeric
+  const n = parseFloat(val);
+  if (!isNaN(n)) {
+    // If expressed as decimal (e.g. 0.1), convert to percent
+    return n <= 1 ? Math.round(n * 100) : n;
+  }
+  return 0;
+}
+
+// Bug 1 helper: check if a row is a repeated header row
+function isRepeatHeaderRow(row, headerRow) {
+  if (!row.some(c => c !== '' && c !== null)) return false;
+  const rowStr = row.map(c => String(c ?? '').trim().toLowerCase()).join('|');
+  const hdrStr = headerRow.map(c => String(c ?? '').trim().toLowerCase()).join('|');
+  // Same as header = repeated header
+  if (rowStr === hdrStr) return true;
+  // Row has ≥ 3 matching values with header (likely a sub-header / category row with few non-null values)
+  const nonNullCount = row.filter(c => c !== '' && c !== null).length;
+  if (nonNullCount <= 2) return false; // too sparse to judge
+  let matches = 0;
+  row.forEach((c, i) => {
+    if (c !== '' && c !== null && String(c).trim().toLowerCase() === String(headerRow[i] ?? '').trim().toLowerCase()) matches++;
+  });
+  return matches >= 3;
+}
+
 function convert() {
   const schema = TASK_SCHEMAS[currentTask];
   log(`▸ Task: ${currentTask.replace(/_/g,' ')}`, 'info');
@@ -966,10 +1002,14 @@ function convert() {
   const outputRows = [];
   let converted = 0;
   let skipped = 0;
+  let headerDups = 0;
 
   currentSheetData.forEach((row, i) => {
     // Skip empty rows
     if (!row.some(c => c !== '' && c !== null)) { skipped++; return; }
+
+    // Bug 1: Skip repeated header rows (e.g. Kamereo category separators)
+    if (isRepeatHeaderRow(row, currentHeaders)) { headerDups++; return; }
 
     const outRow = {};
     currentMapping.forEach(m => {
@@ -988,24 +1028,38 @@ function convert() {
     if (currentTask === 'create_product') {
       // Auto-fill Source if empty
       if (!outRow['Source']) outRow['Source'] = 'Internal';
-      // Ensure selling VAT default
-      if (!outRow['Selling VAT (Required)']) outRow['Selling VAT (Required)'] = 0;
+      // Ensure selling VAT default — parse if text
+      const sv = outRow['Selling VAT (Required)'];
+      outRow['Selling VAT (Required)'] = sv !== '' && sv !== undefined ? parseVatValue(sv) : 0;
+      const suv = outRow["Supplier's VAT"];
+      if (suv !== '' && suv !== undefined) outRow["Supplier's VAT"] = parseVatValue(suv);
     }
 
+    // Bug 3 fix: ensure all required partner fields have fallback defaults
     if (currentTask === 'create_partner') {
       if (!outRow['Partner Type (required)']) outRow['Partner Type (required)'] = 'local';
-      if (!outRow['Name of contact (required)']) outRow['Name of contact (required)'] = 'N/A';
-      if (!outRow['Position (required)']) outRow['Position (required)'] = 'N/A';
-      if (!outRow['Phone (required)']) outRow['Phone (required)'] = 'N/A';
-      if (!outRow['Email (required)']) outRow['Email (required)'] = 'N/A';
+      if (!outRow['Name of contact (required)'] || outRow['Name of contact (required)'] === '') outRow['Name of contact (required)'] = 'N/A';
+      if (!outRow['Position (required)'] || outRow['Position (required)'] === '') outRow['Position (required)'] = 'N/A';
+      // Phone: try to combine phone + mobile if phone is empty
+      const phone = outRow['Phone (required)'];
+      if (!phone || phone === '') outRow['Phone (required)'] = 'N/A';
+      if (!outRow['Email (required)'] || outRow['Email (required)'] === '') outRow['Email (required)'] = 'N/A';
+    }
+
+    // Bug 4: VAT text → number for update_pricelist
+    if (currentTask === 'update_pricelist') {
+      const vat = outRow['VAT (%)'];
+      outRow['VAT (%)'] = parseVatValue(vat);
     }
 
     outputRows.push(outRow);
     converted++;
   });
 
+  if (headerDups > 0) log(`⚠ Skipped ${headerDups} repeated header/category rows`, 'warn');
+
   log(`✓ Converted: ${converted} rows`, 'ok');
-  if (skipped > 0) log(`⚠ Skipped (empty): ${skipped} rows`, 'warn');
+  if (skipped > 0) log(`↷ Skipped (empty): ${skipped} rows`, 'dim');
 
   // Build output workbook from Oda template structure
   const wb = XLSX.utils.book_new();
