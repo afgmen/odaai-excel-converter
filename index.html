@@ -652,19 +652,19 @@ const TASK_SCHEMAS = {
       { oda: 'ProductID', aliases: ['productid', 'product id', 'id'], required: false },
       { oda: 'SKU', aliases: ['sku', 'item code', 'code', 'mã', 'ma', 'mã sản phẩm', 'item id'], required: false },
       { oda: 'Barcode', aliases: ['barcode', 'ean', 'upc'], required: false },
-      { oda: 'Category_1st (Required)', aliases: ['cat', 'category', 'cat.', 'loại', 'nhóm'], required: true, default: 'Vegetable' },
+      { oda: 'Category_1st (Required)', aliases: ['cat', 'category', 'cat.', 'loại', 'nhóm', 'Category'], required: true, default: 'Vegetable' },
       { oda: 'Category_2nd (Required)', aliases: ['category2', 'subcat'], required: true, default: 'Leaf vegetable' },
       { oda: 'Category_3rd', aliases: ['category3'], required: false },
-      { oda: 'Product name "Primary language" (Required)', aliases: ['tên món', 'tên sản phẩm', 'name', 'ten mon', 'product name', 'item name', 'hoa trang trí', 'rau mùi', 'name (vn)', 'product name (vn)', 'primary'], required: true },
+      { oda: 'Product name "Primary language" (Required)', aliases: ['tên món', 'tên sản phẩm', 'ten mon', 'product name', 'item name', 'hoa trang trí', 'rau mùi', 'name (vn)', 'product name (vn)', 'primary', 'tên'], required: true },
       { oda: 'Product name "Secondary language"', aliases: ['english name', 'name en', 'name (en)', 'english', 'decorative flowers', 'herbs', 'secondary'], required: false },
       { oda: 'Product name "Additional language"', aliases: ['chinese name', 'korean', 'additional'], required: false },
       { oda: 'Source', aliases: ['source', 'nguồn'], required: false, default: 'Internal' },
       { oda: "Supplier's Name", aliases: ['supplier', 'nhà cung cấp', 'ncc', 'source.name', 'an thinh phat'], required: false },
-      { oda: "Supplier's Price", aliases: ["supplier's price", 'giá nhập', 'buy price', 'giá trước vat', 'price excl. vat', 'price excl vat'], required: false },
+      { oda: "Supplier's Price", aliases: ["supplier's price", 'giá nhập', 'buy price', 'giá trước vat', 'price excl. vat', 'price excl vat', 'old price'], required: false },
       { oda: "Supplier's VAT", aliases: ["supplier's vat", 'vat%', 'vat %', 'vat', 'thuế'], required: false },
       { oda: 'Selling Price (Required)', aliases: ['selling price', 'giá bán', 'giá sau vat', 'price incl. vat', 'price incl vat', 'giá', 'price', 'july (incl.vat)', 'đơn giá'], required: true },
       { oda: 'Selling VAT (Required)', aliases: ['selling vat'], required: true, default: '0' },
-      { oda: 'UoM', aliases: ['uom', 'uom (required)', 'đvt', 'đơn vị', 'unit', 'dvt'], required: false },
+      { oda: 'UoM', aliases: ['uom', 'uom (required)', 'đvt', 'đơn vị', 'unit', 'dvt', 'đơn vị/ unit', 'đơn vị/unit'], required: false },
       { oda: 'Origin', aliases: ['origin', 'xuất xứ', 'nguồn gốc'], required: false },
     ]
   },
@@ -807,8 +807,30 @@ function findBestSheet() {
   return workbook.SheetNames[0];
 }
 
+// Check if this workbook looks like a Chợ Deli weekly price file
+// (many sheets, each with a date-range name, containing STT/Tên món/Giá columns)
+function isChoDeli() {
+  if (!workbook) return false;
+  const sheets = workbook.SheetNames;
+  if (sheets.length < 3) return false;
+  // Heuristic: multiple sheets with date-like names (digits and dashes)
+  const dateLike = sheets.filter(n => /\d/.test(n)).length;
+  if (dateLike < 3) return false;
+  // Check first sheet has STT column
+  const ws = workbook.Sheets[sheets[0]];
+  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  return raw.slice(0, 15).some(r => r.some(c => String(c).trim() === 'STT'));
+}
+
 function loadSheet() {
   const sheetName = document.getElementById('sheetSelect').value;
+
+  // ── Chợ Deli: multi-sheet mode ─────────────────────────────
+  if (currentTask === 'create_product' && isChoDeli()) {
+    loadChoDeliAllSheets();
+    return;
+  }
+
   const ws = workbook.Sheets[sheetName];
   const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
 
@@ -823,9 +845,67 @@ function loadSheet() {
   }
 
   currentHeaders = raw[detectedHeaderRow] || [];
+
+  // ── V-Garden: normalize header whitespace ──────────────────
+  currentHeaders = currentHeaders.map(h => {
+    if (typeof h !== 'string') return h;
+    return h.replace(/\s+/g, ' ').trim();
+  });
+
   currentSheetData = raw.slice(detectedHeaderRow + 1).filter(r => r.some(c => c !== '' && c !== null));
 
   showPreview(raw);
+  regenerateMapping();
+  document.getElementById('previewWrap').style.display = 'block';
+  document.getElementById('logBox').style.display = 'none';
+  document.getElementById('resultBox').style.display = 'none';
+}
+
+// Chợ Deli: combine rows from ALL sheets (weekly price format)
+// Layout: col1=STT, col2=Cat., col3=Tên món, col4=Giá cũ, col5=Giá mới, col6=ĐVT
+// Each sheet may also have a mirrored right-hand table starting at col12+
+function loadChoDeliAllSheets() {
+  const CDHEADERS = ['STT', 'Category', 'Product name (Primary)', 'Old Price', 'Selling Price', 'UoM'];
+  const IDX  = { stt:1, cat:2, name:3, oldPrice:4, newPrice:5, uom:6 };
+  const IDX_R = { stt:12, cat:13, name:14, oldPrice:15, newPrice:16, uom:17 };
+
+  let combined = [];
+  let sheetsLoaded = 0;
+
+  workbook.SheetNames.forEach(sn => {
+    const ws = workbook.Sheets[sn];
+    const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    const hIdx = raw.findIndex((r, i) => i < 15 && r.some(c => String(c).trim() === 'STT'));
+    if (hIdx < 0) return;
+    sheetsLoaded++;
+    raw.slice(hIdx + 1).forEach(row => {
+      // Left table
+      if (row.length > IDX.name && typeof row[IDX.stt] === 'number' && row[IDX.name]) {
+        combined.push([
+          row[IDX.stt] ?? '', row[IDX.cat] ?? '', row[IDX.name] ?? '',
+          row[IDX.oldPrice] ?? '', row[IDX.newPrice] ?? '', row[IDX.uom] ?? ''
+        ]);
+      }
+      // Right table (mirrored)
+      if (row.length > IDX_R.name && typeof row[IDX_R.stt] === 'number' && row[IDX_R.name]) {
+        combined.push([
+          row[IDX_R.stt] ?? '', row[IDX_R.cat] ?? '', row[IDX_R.name] ?? '',
+          row[IDX_R.oldPrice] ?? '', row[IDX_R.newPrice] ?? '', row[IDX_R.uom] ?? ''
+        ]);
+      }
+    });
+  });
+
+  detectedHeaderRow = 0;
+  currentHeaders = CDHEADERS;
+  currentSheetData = combined;
+
+  const previewRaw = [CDHEADERS, ...combined.slice(0, 7)];
+  showPreview(previewRaw);
+
+  const metaEl = document.querySelector('.file-meta');
+  if (metaEl) metaEl.textContent += ' · Chợ Deli: ' + sheetsLoaded + ' sheets merged · ' + combined.length + ' rows';
+
   regenerateMapping();
   document.getElementById('previewWrap').style.display = 'block';
   document.getElementById('logBox').style.display = 'none';
