@@ -548,6 +548,16 @@
     </div>
   </header>
 
+  <!-- API Key Input -->
+  <div class="section-label">00 — API Key (for AI features)</div>
+  <div style="margin-bottom:32px">
+    <input type="password" id="apiKeyInput" placeholder="sk-ant-..." 
+           style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-family:'DM Mono',monospace;font-size:12px;outline:none">
+    <p style="font-size:11px;color:var(--text-dimmer);font-family:'DM Mono',monospace;margin-top:6px">
+      ⚠️ Required for AI category classification, address parsing, and UoM conversion
+    </p>
+  </div>
+
   <!-- Step 1: Task Selection -->
   <div class="section-label">01 — Select task type</div>
   <div class="task-grid">
@@ -642,6 +652,24 @@ let currentSheetData = [];
 let currentHeaders = [];
 let detectedHeaderRow = 0;
 let fileName = '';
+
+// ─── API Key Helper ───────────────────────────────────────
+function getApiKey() {
+  return document.getElementById('apiKeyInput')?.value?.trim() || localStorage.getItem('oda_api_key') || '';
+}
+
+// Load API Key from localStorage on page load
+window.addEventListener('DOMContentLoaded', () => {
+  const saved = localStorage.getItem('oda_api_key');
+  if (saved) document.getElementById('apiKeyInput').value = saved;
+});
+
+// Save API Key to localStorage on change
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('apiKeyInput')?.addEventListener('change', e => {
+    localStorage.setItem('oda_api_key', e.target.value.trim());
+  });
+});
 
 // ─── Oda reference data ───────────────────────────────────
 const ODA_CATEGORIES = {
@@ -888,6 +916,12 @@ function findBestSheet() {
 // ─── AI Address Parser ────────────────────────────────────
 // Street Address → Street / Commune/Ward / City 자동 분리
 async function parseAddresses(rows) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    log('⚠ API Key 없음 — 주소 파싱 skip', 'warn');
+    return;
+  }
+
   const BATCH = 30;
   for (let i = 0; i < rows.length; i += BATCH) {
     const batch = rows.slice(i, i + BATCH);
@@ -895,7 +929,9 @@ async function parseAddresses(rows) {
       .map((r, idx) => `${i + idx + 1}. "${r['Street Address'] || ''}"`)
       .join('\n');
 
-    const prompt = `You are an address parsing assistant. Split each address into Street, Ward/Commune, and City/Province.
+    const prompt = `You are a Vietnamese address parsing assistant for Oda platform.
+
+Parse each address into: Street Address, Commune/Ward, and City.
 
 Addresses:
 ${items}
@@ -903,20 +939,24 @@ ${items}
 Rules:
 - Return ONLY a JSON array, no markdown, no explanation.
 - Each element: {"street": "...", "ward": "...", "city": "..."}
-- "street" = house number + street name only
-- "ward" = district/commune/ward/subdistrict (smallest admin unit)
-- "city" = city/province/state (largest admin unit in the address)
-- If a part is unclear, leave it as empty string "".
-- Keep original language (Thai, English, Vietnamese, etc.)
+- "city" = province or city level (e.g. "Ho Chi Minh City", "Hà Nội", "Bình Dương")
+- "ward" = district level (e.g. "Bình Thạnh District", "Thủ Đức District", "2 District", "7 District")
+- "street" = street name + house number (the most specific part)
+- Common patterns: "Quận X" → "X District", "Huyện X" → "X District", "Thành phố Hồ Chí Minh" → "Ho Chi Minh City"
+- If unclear, best guess based on Vietnamese geography
 
 Example:
-Input: "88 Soi Ladprao 101, Klongjan, Bangkapi, Bangkok"
-Output: {"street":"88 Soi Ladprao 101","ward":"Klongjan, Bangkapi","city":"Bangkok"}`;
+Input: "123 Nguyễn Văn Linh, Phường Tân Mỹ, Quận 7, TP.HCM"
+Output: {"street":"123 Nguyễn Văn Linh","ward":"7 District","city":"Ho Chi Minh City"}`;
 
     try {
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01'
+        },
         body: JSON.stringify({
           model: 'claude-sonnet-4-20250514',
           max_tokens: 1000,
@@ -1298,6 +1338,14 @@ async function runConvert() {
         await classifyCategories(result.rows);
         log(`✅ AI 카테고리 분류 완료`, 'ok');
       }
+
+      // Step 2-1: UoM AI 변환 (매핑 안 된 것들)
+      const unmappedUom = result.rows.filter(r => r['UoM'] && !ODA_UOM_LIST.includes(r['UoM']));
+      if (unmappedUom.length > 0 && getApiKey()) {
+        log(`▸ AI UoM 변환 중... (${unmappedUom.length}개)`, 'info');
+        btn.innerHTML = '<div class="spinner"></div><span>AI UoM 변환 중...</span>';
+        await normalizeUomWithAI(result.rows);
+      }
     }
 
     // Step 5: create_partner일 때 AI 주소 파싱 (City / Ward 자동 분리)
@@ -1319,8 +1367,66 @@ async function runConvert() {
   btn.innerHTML = '<span>⚡ Convert to Oda Format</span>';
 }
 
+// ─── AI UoM Normalizer ─────────────────────────────────────
+async function normalizeUomWithAI(rows) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    log('⚠ API Key 없음 — UoM 변환 skip', 'warn');
+    return;
+  }
+
+  // 매핑 안 된 UoM만 수집 (중복 제거)
+  const uniqueUnmapped = [...new Set(
+    rows.filter(r => r['UoM'] && !ODA_UOM_LIST.includes(r['UoM'])).map(r => r['UoM'])
+  )];
+  if (uniqueUnmapped.length === 0) return;
+
+  const prompt = `Convert these UoM values to match Oda's official UoM list.
+
+Oda UoM list: ${ODA_UOM_LIST.join(', ')}
+
+Values to convert:
+${uniqueUnmapped.map((u,i) => `${i+1}. "${u}"`).join('\n')}
+
+Rules:
+- Return ONLY a JSON object: {"original": "converted", ...}
+- Use EXACT spelling from Oda list
+- Best match only, no explanation`;
+
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-20250514',
+        max_tokens: 500,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    const data = await resp.json();
+    const text = data.content?.[0]?.text || '{}';
+    const mapping = JSON.parse(text.replace(/```json|```/g, '').trim());
+    rows.forEach(r => {
+      if (r['UoM'] && mapping[r['UoM']]) r['UoM'] = mapping[r['UoM']];
+    });
+    log(`✅ AI UoM 변환 완료`, 'ok');
+  } catch(e) {
+    log(`⚠ AI UoM 변환 실패: ${e.message}`, 'warn');
+  }
+}
+
 // ─── AI Category Classification ───────────────────────────
 async function classifyCategories(rows) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    log('⚠ API Key 없음 — 카테고리 분류 skip', 'warn');
+    return;
+  }
+
   const CAT1_LIST = Object.keys(ODA_CATEGORIES).join(', ');
   const CAT2_JSON = JSON.stringify(ODA_CATEGORIES, null, 2);
 
@@ -1358,7 +1464,11 @@ Example output:
     try {
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01'
+        },
         body: JSON.stringify({
           model: 'claude-sonnet-4-20250514',
           max_tokens: 1000,
