@@ -643,29 +643,107 @@ let currentHeaders = [];
 let detectedHeaderRow = 0;
 let fileName = '';
 
+// ─── Oda reference data ───────────────────────────────────
+const ODA_CATEGORIES = {
+  'Vegetable':               ['Leaf vegetable', 'Fruit vegetable', 'Processed vegetable', 'Mushroom', 'Frozen vegetables', 'Others'],
+  'Fruit':                   ['Fresh Fruit', 'Frozen fruit', 'Dried fruit', 'Imported fruits', 'Others'],
+  'Beverage':                ['Non- alcoholic', 'Alcoholic', 'Others'],
+  'Seafood':                 ['Fresh', 'Dried', 'Frozen', 'Others'],
+  'Meat':                    ['Beef', 'Pork', 'Poultry', 'Egg', 'Canned meat', 'Others'],
+  'Ingredient / Seasoning':  ['Sauce', 'Vinegar / Cooking wine', 'Dried spices', 'Oil', 'Others'],
+  'Dairy product':           ['Cheese', 'Butter', 'Milk', 'Others'],
+  'Beverage ingredients':    ['Syrup', 'Powder', 'Jam', 'Others'],
+  'Grain':                   ['Whole wheat', 'Oats', 'Rye', 'Soy', 'Buckwheat', 'Sesame seeds', 'Rice', 'Noodles', 'Bread', 'Flour', 'Others'],
+  'Equipment':               ['Essential equipments', 'Eating utensils', 'Baking equipment', 'Barista equipment', 'Others'],
+  'Stationary':              ['Writing', 'Paper', 'Others'],
+  'Processed Food':          ['Fresh processed food', 'Frozen processed food', 'Dried processed food', 'Others'],
+};
+
+const ODA_UOM_LIST = ['piece','bottle','pack','bag','box','carton','can','jerrycan','jar','set','crate','keg','sheet','tray','head','ea','g','kg','t','liter'];
+
+// Vietnamese / common → Oda UoM 규칙 기반 매핑 테이블
+const UOM_MAP = {
+  // Vietnamese → Oda
+  'kg': 'kg', 'kgs': 'kg', 'kilogram': 'kg',
+  'g': 'g', 'gram': 'g', 'gr': 'g',
+  'l': 'liter', 'lít': 'liter', 'lit': 'liter', 'liter': 'liter', 'litre': 'liter',
+  'ml': 'liter',
+  'chai': 'bottle',   // chai = bottle
+  'bình': 'bottle',   // bình = bottle/jug
+  'lon': 'can',       // lon = can
+  'hộp': 'box',       // hộp = box
+  'hủ': 'jar', 'hũ': 'jar',  // hũ/hủ = jar
+  'gói': 'pack',      // gói = pack/bag
+  'túi': 'bag',       // túi = bag
+  'bịch': 'bag',      // bịch = bag
+  'bao': 'bag',       // bao = bag/sack
+  'thùng': 'carton',  // thùng = carton/crate
+  'lốc': 'pack',      // lốc = pack (multi-pack)
+  'khay': 'tray',     // khay = tray
+  'vỉ': 'tray',       // vỉ = blister/tray
+  'cái': 'piece',     // cái = piece/item
+  'con': 'piece',     // con = piece (animals/fish)
+  'quả': 'piece',     // quả = piece (fruit)
+  'trái': 'piece',    // trái = piece (fruit)
+  'miếng': 'piece',   // miếng = piece/slice
+  'cục': 'piece',     // cục = piece/chunk
+  'cây': 'piece',     // cây = piece/stick
+  'ống': 'piece',     // ống = tube/piece
+  'ổ': 'piece',       // ổ = piece (bread)
+  'lá': 'piece',      // lá = leaf/sheet → piece
+  'cuộn': 'sheet',    // cuộn = roll/sheet
+  'khối': 'piece',    // khối = block
+  // English shortcuts
+  'pcs': 'piece', 'pc': 'piece', 'pieces': 'piece',
+  'ea': 'ea', 'each': 'ea',
+  'box': 'box', 'boxes': 'box',
+  'pack': 'pack', 'packs': 'pack', 'packet': 'pack',
+  'bag': 'bag', 'bags': 'bag',
+  'bottle': 'bottle', 'bottles': 'bottle',
+  'can': 'can', 'cans': 'can',
+  'jar': 'jar', 'jars': 'jar',
+  'tray': 'tray', 'trays': 'tray',
+  'carton': 'carton', 'ctn': 'carton',
+  'head': 'head',
+  'set': 'set',
+  'sheet': 'sheet',
+  'keg': 'keg',
+};
+
+function normalizeUom(raw) {
+  if (!raw || raw === '') return '';
+  const s = String(raw).trim();
+  // 이미 Oda 목록에 있으면 그대로 (대소문자 무시)
+  const exact = ODA_UOM_LIST.find(u => u.toLowerCase() === s.toLowerCase());
+  if (exact) return exact;
+  // 숫자 제거 후 매핑 (예: 'Bao 20kg' → 'bao' → 'bag')
+  const cleaned = s.toLowerCase().replace(/\s*\d+[.,]?\d*\s*(kg|g|ml|l)?/gi, '').replace(/[\d.,]/g, '').trim();
+  return UOM_MAP[cleaned] || s; // 매핑 없으면 원본 유지
+}
+
 // ─── Task schema definitions ─────────────────────────────
 const TASK_SCHEMAS = {
   create_product: {
     outputSheet: 'Product',
     startRow: 9, // Oda template data starts at row 10 (0-indexed: 9)
     columns: [
-      { oda: 'ProductID', aliases: ['productid', 'product id', 'id'], required: false },
-      { oda: 'SKU', aliases: ['sku', 'item code', 'code', 'mã', 'ma', 'mã sản phẩm', 'item id'], required: false },
-      { oda: 'Barcode', aliases: ['barcode', 'ean', 'upc'], required: false },
-      { oda: 'Category_1st (Required)', aliases: ['cat', 'category', 'cat.', 'loại', 'nhóm', 'Category'], required: true, default: 'Vegetable' },
-      { oda: 'Category_2nd (Required)', aliases: ['category2', 'subcat'], required: true, default: 'Leaf vegetable' },
-      { oda: 'Category_3rd', aliases: ['category3'], required: false },
-      { oda: 'Product name "Primary language" (Required)', aliases: ['tên món', 'tên sản phẩm', 'ten mon', 'product name', 'item name', 'hoa trang trí', 'rau mùi', 'name (vn)', 'product name (vn)', 'primary', 'tên'], required: true },
-      { oda: 'Product name "Secondary language"', aliases: ['english name', 'name en', 'name (en)', 'english', 'decorative flowers', 'herbs', 'secondary'], required: false },
-      { oda: 'Product name "Additional language"', aliases: ['chinese name', 'korean', 'additional'], required: false },
-      { oda: 'Source', aliases: ['source', 'nguồn'], required: false, default: 'Internal' },
-      { oda: "Supplier's Name", aliases: ['supplier', 'nhà cung cấp', 'ncc', 'source.name', 'an thinh phat'], required: false },
-      { oda: "Supplier's Price", aliases: ["supplier's price", 'giá nhập', 'buy price', 'giá trước vat', 'price excl. vat', 'price excl vat', 'old price'], required: false },
-      { oda: "Supplier's VAT", aliases: ["supplier's vat", 'vat%', 'vat %'], required: false },
-      { oda: 'Selling Price (Required)', aliases: ['selling price', 'giá bán', 'giá sau vat', 'price incl. vat', 'price incl vat', 'giá', 'price', 'july (incl.vat)', 'đơn giá'], required: true },
-      { oda: 'Selling VAT (Required)', aliases: ['selling vat'], required: true, default: '0' },
-      { oda: 'UoM', aliases: ['uom', 'uom (required)', 'đvt', 'đơn vị', 'unit', 'dvt', 'đơn vị/ unit', 'đơn vị/unit'], required: false },
-      { oda: 'Origin', aliases: ['origin', 'xuất xứ', 'nguồn gốc'], required: false },
+      { oda: 'ProductID',                                    aliases: ['productid', 'product id'],                                                                                                required: false },
+      { oda: 'SKU',                                          aliases: ['sku', 'item code', 'item id', 'mã sản phẩm', 'ma san pham'],                                                              required: false },
+      { oda: 'Barcode',                                      aliases: ['barcode', 'ean', 'upc'],                                                                                                  required: false },
+      { oda: 'Category_1st (Required)',                      aliases: ['cat.', 'category 1', 'category1', 'cat1', 'loại 1', 'nhóm 1'],                                                           required: true,  default: 'Vegetable' },
+      { oda: 'Category_2nd (Required)',                      aliases: ['category 2', 'category2', 'cat2', 'subcat', 'loại 2', 'nhóm 2'],                                                         required: true,  default: 'Leaf vegetable' },
+      { oda: 'Category_3rd',                                 aliases: ['category 3', 'category3', 'cat3'],                                                                                       required: false },
+      { oda: 'Product name "Primary language" (Required)',   aliases: ['tên món', 'tên sản phẩm', 'ten mon', 'product name', 'item name', 'hoa trang trí', 'rau mùi', 'name (vn)', 'tên'],      required: true },
+      { oda: 'Product name "Secondary language"',            aliases: ['english name', 'name en', 'name (en)', 'decorative flowers', 'herbs'],                                                   required: false },
+      { oda: 'Product name "Additional language"',           aliases: ['chinese name', 'tên trung', 'additional language'],                                                                      required: false },
+      { oda: 'Source',                                       aliases: ['source', 'nguồn gốc xuất xứ'],                                                                                           required: false, default: 'Internal' },
+      { oda: "Supplier's Name",                              aliases: ["supplier's name", 'nhà cung cấp', 'ncc', 'source.name'],                                                                 required: false },
+      { oda: "Supplier's Price",                             aliases: ["supplier's price", 'giá nhập', 'buy price', 'giá trước vat', 'price excl. vat', 'giá cũ', 'old price'],                 required: false },
+      { oda: "Supplier's VAT",                               aliases: ["supplier's vat", 'vat%', 'vat %'],                                                                                       required: false },
+      { oda: 'Selling Price (Required)',                     aliases: ['selling price', 'giá bán', 'giá sau vat', 'price incl. vat', 'price incl vat', 'july (incl.vat)', 'đơn giá', 'giá mới'], required: true },
+      { oda: 'Selling VAT (Required)',                       aliases: ['selling vat'],                                                                                                           required: true,  default: '0' },
+      { oda: 'UoM',                                         aliases: ['uom', 'đvt', 'đơn vị', 'unit', 'đơn vị/ unit', 'đơn vị/unit'],                                                          required: false },
+      { oda: 'Origin',                                       aliases: ['origin', 'xuất xứ', 'nguồn gốc'],                                                                                       required: false },
     ]
   },
   create_partner: {
@@ -807,6 +885,134 @@ function findBestSheet() {
   return workbook.SheetNames[0];
 }
 
+// ─── AI Address Parser ────────────────────────────────────
+// Street Address → Street / Commune/Ward / City 자동 분리
+async function parseAddresses(rows) {
+  const BATCH = 30;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const batch = rows.slice(i, i + BATCH);
+    const items = batch
+      .map((r, idx) => `${i + idx + 1}. "${r['Street Address'] || ''}"`)
+      .join('\n');
+
+    const prompt = `You are an address parsing assistant. Split each address into Street, Ward/Commune, and City/Province.
+
+Addresses:
+${items}
+
+Rules:
+- Return ONLY a JSON array, no markdown, no explanation.
+- Each element: {"street": "...", "ward": "...", "city": "..."}
+- "street" = house number + street name only
+- "ward" = district/commune/ward/subdistrict (smallest admin unit)
+- "city" = city/province/state (largest admin unit in the address)
+- If a part is unclear, leave it as empty string "".
+- Keep original language (Thai, English, Vietnamese, etc.)
+
+Example:
+Input: "88 Soi Ladprao 101, Klongjan, Bangkapi, Bangkok"
+Output: {"street":"88 Soi Ladprao 101","ward":"Klongjan, Bangkapi","city":"Bangkok"}`;
+
+    try {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1000,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+      const data = await resp.json();
+      const text = data.content?.[0]?.text || '[]';
+      const clean = text.replace(/```json|```/g, '').trim();
+      const parsed = JSON.parse(clean);
+      parsed.forEach((p, j) => {
+        if (i + j < rows.length) {
+          rows[i + j]['Street Address']  = p.street || rows[i + j]['Street Address'];
+          rows[i + j]['Commune/ Ward']   = p.ward   || '';
+          rows[i + j]['City']            = p.city   || '';
+        }
+      });
+      log(`  주소 배치 ${Math.floor(i/BATCH)+1} 완료 (${Math.min(i+BATCH, rows.length)}/${rows.length})`, 'dim');
+    } catch(e) {
+      log(`  ⚠ 주소 배치 ${Math.floor(i/BATCH)+1} 실패: ${e.message}`, 'warn');
+    }
+  }
+}
+
+// ─── V-Garden fixed-index loader ─────────────────────────────
+// V-Garden 파일은 헤더에 공백이 많고 alias 기반 매핑이 불안정함.
+// 고정 인덱스: [2]=SKU(code), [3]=VN이름, [4]=EN이름, [5]=CN이름, [6]=UoM, [7]=VAT(5%), [9]=Price
+function isVGarden(wb) {
+  if (!wb) return false;
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  // col2='code'이고 col3에 'name'이 포함된 헤더 행이 있으면 V-Garden
+  return raw.slice(0, 15).some(r =>
+    r.length > 9 &&
+    String(r[2] || '').trim().toLowerCase().includes('code') &&
+    String(r[3] || '').trim().toLowerCase().includes('name')
+  );
+}
+
+function loadVGardenSheet(wb) {
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  const hIdx = raw.findIndex((r, i) =>
+    i < 15 && r.length > 9 &&
+    String(r[2] || '').trim().toLowerCase().includes('code') &&
+    String(r[3] || '').trim().toLowerCase().includes('name')
+  );
+  if (hIdx < 0) return;
+
+  const ODA_COLS = [
+    'ProductID', 'SKU', 'Barcode',
+    'Category_1st (Required)', 'Category_2nd (Required)', 'Category_3rd',
+    'Product name "Primary language" (Required)',
+    'Product name "Secondary language"', 'Product name "Additional language"',
+    'Source', "Supplier's Name", "Supplier's Price", "Supplier's VAT",
+    'Selling Price (Required)', 'Selling VAT (Required)', 'UoM', 'Origin'
+  ];
+
+  const rows = [];
+  for (let i = hIdx + 1; i < raw.length; i++) {
+    const r = raw[i];
+    if (!r || !r.length) continue;
+    if (typeof r[1] !== 'number') continue; // STT가 숫자인 행만
+    rows.push({
+      'ProductID': '',
+      'SKU': r[2] || '',
+      'Barcode': '',
+      'Category_1st (Required)': 'Vegetable',
+      'Category_2nd (Required)': 'Leaf vegetable',
+      'Category_3rd': '',
+      'Product name "Primary language" (Required)': r[3] || '',
+      'Product name "Secondary language"': r[4] || '',
+      'Product name "Additional language"': r[5] || '',
+      'Source': 'Internal',
+      "Supplier's Name": '',
+      "Supplier's Price": '',
+      "Supplier's VAT": parseVatValue(r[7]),
+      'Selling Price (Required)': r[9] || '',
+      'Selling VAT (Required)': 0,
+      'UoM': r[6] || '',
+      'Origin': ''
+    });
+  }
+
+  currentHeaders = ODA_COLS;
+  currentSheetData = rows.map(o => ODA_COLS.map(c => o[c] || ''));
+  currentMapping = ODA_COLS.map((col, i) => ({
+    oda: col, customer: col, customerIdx: i, required: false, default: ''
+  }));
+
+  showPreview(null);
+  document.getElementById('previewWrap').style.display = 'block';
+  document.getElementById('logBox').style.display = 'none';
+  document.getElementById('resultBox').style.display = 'none';
+}
+
 // Check if this workbook looks like a Chợ Deli weekly price file
 // (many sheets, each with a date-range name, containing STT/Tên món/Giá columns)
 function isChoDeli() {
@@ -825,7 +1031,13 @@ function isChoDeli() {
 function loadSheet() {
   const sheetName = document.getElementById('sheetSelect').value;
 
-  // ── Chợ Deli: multi-sheet mode ─────────────────────────────
+  // ── V-Garden: fixed-index mode ─────────────────────────────
+  if (currentTask === 'create_product' && isVGarden(workbook)) {
+    loadVGardenSheet(workbook);
+    return;
+  }
+
+  // ── Cho Deli: multi-sheet mode ──────────────────────────────
   if (currentTask === 'create_product' && isChoDeli()) {
     loadChoDeliAllSheets();
     return;
@@ -939,17 +1151,44 @@ function buildMapping() {
     let found = null;
     let foundIdx = -1;
 
-    // Normalize header for matching
+    // Normalize header for matching — exact → startsWith → includes (priority order)
+    // Phase 1: exact match
     currentHeaders.forEach((h, idx) => {
       const norm = String(h).toLowerCase().trim().replace(/[\n\r]/g, ' ').replace(/\s+/g, ' ');
-      if (!norm) return; // Fix: skip empty headers (Bug B — V-Garden blank col0)
+      if (!norm) return;
       for (const alias of col.aliases) {
-        if (!alias) return;
-        if (norm === alias || norm.includes(alias) || alias.includes(norm)) {
+        if (!alias) continue;
+        if (norm === alias) {
           if (!found) { found = h; foundIdx = idx; }
         }
       }
     });
+    // Phase 2: startsWith (if no exact match found)
+    if (!found) {
+      currentHeaders.forEach((h, idx) => {
+        const norm = String(h).toLowerCase().trim().replace(/[\n\r]/g, ' ').replace(/\s+/g, ' ');
+        if (!norm) return;
+        for (const alias of col.aliases) {
+          if (!alias) continue;
+          if (norm.startsWith(alias)) {
+            if (!found) { found = h; foundIdx = idx; }
+          }
+        }
+      });
+    }
+    // Phase 3: substring includes (if still no match)
+    if (!found) {
+      currentHeaders.forEach((h, idx) => {
+        const norm = String(h).toLowerCase().trim().replace(/[\n\r]/g, ' ').replace(/\s+/g, ' ');
+        if (!norm) return;
+        for (const alias of col.aliases) {
+          if (!alias) continue;
+          if (norm.includes(alias) || alias.includes(norm)) {
+            if (!found) { found = h; foundIdx = idx; }
+          }
+        }
+      });
+    }
 
     mapping.push({
       oda: col.oda,
@@ -972,31 +1211,53 @@ function regenerateMapping() {
 
 function renderMapping() {
   const list = document.getElementById('mappingList');
+  // 고객 컬럼 옵션 목록 생성 (헤더에서)
+  const custOptions = currentHeaders
+    .map((h, i) => ({ label: String(h || '').trim(), idx: i }))
+    .filter(o => o.label !== '');
+
   let html = '';
-  currentMapping.forEach(m => {
+  currentMapping.forEach((m, mi) => {
     const odaShort = m.oda.replace(/\(Required\)/i, '').replace(/\n/g, ' ').trim();
-    if (m.customer) {
-      const custShort = String(m.customer).substring(0, 22);
-      html += `<div class="mapping-row">
-        <div class="mapping-from">${custShort}</div>
-        <div class="mapping-arrow">→</div>
-        <div class="mapping-to">${odaShort}</div>
-      </div>`;
-    } else if (m.required) {
-      html += `<div class="mapping-row">
-        <div class="mapping-from" style="color:var(--warning);background:rgba(251,191,36,0.08)">${m.default || '(empty)'}</div>
-        <div class="mapping-arrow" style="color:var(--warning)">→</div>
-        <div class="mapping-to" style="background:rgba(251,191,36,0.1);color:var(--warning)">${odaShort} ⚠</div>
-      </div>`;
-    } else {
-      html += `<div class="mapping-row">
-        <div class="mapping-from mapping-skip">—</div>
-        <div class="mapping-arrow" style="color:var(--text-dimmer)">→</div>
-        <div class="mapping-to mapping-skip">${odaShort}</div>
-      </div>`;
-    }
+    const isMatched = m.customerIdx >= 0;
+    const isRequired = m.required;
+
+    // 드롭다운 옵션 생성
+    let opts = `<option value="-1">— (skip)</option>`;
+    custOptions.forEach(o => {
+      const sel = o.idx === m.customerIdx ? 'selected' : '';
+      opts += `<option value="${o.idx}" ${sel}>${o.label.substring(0,28)}</option>`;
+    });
+
+    const rowStyle = isMatched ? '' : (isRequired ? 'border-color:rgba(251,191,36,0.4)' : 'opacity:0.55');
+    const odaStyle = isRequired && !isMatched ? 'color:var(--warning)' : '';
+
+    html += `<div class="mapping-row" style="${rowStyle}">
+      <select class="map-select" data-mi="${mi}" onchange="onMappingChange(this)" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:4px 6px;font-size:12px;cursor:pointer">
+        ${opts}
+      </select>
+      <div class="mapping-arrow">→</div>
+      <div class="mapping-to" style="${odaStyle}">${odaShort}${isRequired && !isMatched ? ' ⚠' : ''}</div>
+    </div>`;
   });
   list.innerHTML = html;
+}
+
+function onMappingChange(sel) {
+  const mi = parseInt(sel.dataset.mi);
+  const idx = parseInt(sel.value);
+  currentMapping[mi].customerIdx = idx;
+  currentMapping[mi].customer = idx >= 0 ? currentHeaders[idx] : null;
+  // 스타일 즉시 업데이트
+  const row = sel.closest('.mapping-row');
+  if (idx >= 0) {
+    row.style.opacity = '1';
+    row.style.borderColor = '';
+  } else if (currentMapping[mi].required) {
+    row.style.borderColor = 'rgba(251,191,36,0.4)';
+  } else {
+    row.style.opacity = '0.55';
+  }
 }
 
 // ─── Conversion ───────────────────────────────────────────
@@ -1010,7 +1271,7 @@ function log(msg, type = 'info') {
   box.scrollTop = box.scrollHeight;
 }
 
-function runConvert() {
+async function runConvert() {
   const btn = document.getElementById('convertBtn');
   const logBox = document.getElementById('logBox');
   logBox.style.display = 'block';
@@ -1019,16 +1280,103 @@ function runConvert() {
   btn.disabled = true;
   btn.innerHTML = '<div class="spinner"></div><span>Converting...</span>';
 
-  setTimeout(() => {
-    try {
-      const result = convert();
-      showResult(result);
-    } catch(e) {
-      log('❌ Error: ' + e.message, 'err');
+  try {
+    // Step 1: 기본 변환
+    const result = convert();
+
+    // Step 2: create_product일 때 AI 카테고리 분류
+    if (currentTask === 'create_product') {
+      const needsCat = result.rows.filter(r =>
+        !r['Category_1st (Required)'] || r['Category_1st (Required)'] === 'Vegetable'
+      );
+      if (needsCat.length > 0) {
+        log(`▸ AI 카테고리 분류 중... (${result.rows.length}개 상품)`, 'info');
+        btn.innerHTML = '<div class="spinner"></div><span>AI 분류 중...</span>';
+        await classifyCategories(result.rows);
+        log(`✅ AI 카테고리 분류 완료`, 'ok');
+      }
     }
-    btn.disabled = false;
-    btn.innerHTML = '<span>⚡ Convert to Oda Format</span>';
-  }, 100);
+
+    // Step 5: create_partner일 때 AI 주소 파싱 (City / Ward 자동 분리)
+    if (currentTask === 'create_partner') {
+      const hasAddr = result.rows.some(r => r['Street Address'] && r['Street Address'] !== '');
+      if (hasAddr) {
+        log(`▸ AI 주소 파싱 중... (${result.rows.length}개 파트너)`, 'info');
+        btn.innerHTML = '<div class="spinner"></div><span>AI 주소 파싱 중...</span>';
+        await parseAddresses(result.rows);
+        log(`✅ AI 주소 파싱 완료`, 'ok');
+      }
+    }
+
+    showResult(result);
+  } catch(e) {
+    log('❌ Error: ' + e.message, 'err');
+  }
+  btn.disabled = false;
+  btn.innerHTML = '<span>⚡ Convert to Oda Format</span>';
+}
+
+// ─── AI Category Classification ───────────────────────────
+async function classifyCategories(rows) {
+  const CAT1_LIST = Object.keys(ODA_CATEGORIES).join(', ');
+  const CAT2_JSON = JSON.stringify(ODA_CATEGORIES, null, 2);
+
+  // 배치 처리: 50개씩 묶어서 API 호출
+  const BATCH = 50;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const batch = rows.slice(i, i + BATCH);
+    const items = batch.map((r, idx) => {
+      const nameVN = r['Product name "Primary language" (Required)'] || '';
+      const nameEN = r['Product name "Secondary language"'] || '';
+      return `${i + idx + 1}. "${nameVN}"${nameEN ? ' / "' + nameEN + '"' : ''}`;
+    }).join('\n');
+
+    const prompt = `You are a product categorization assistant for Oda, a Vietnamese B2B food supply platform.
+
+Classify each product into EXACTLY one Category 1st and one Category 2nd from the lists below.
+
+Category 1st options: ${CAT1_LIST}
+
+Category 2nd options (by Category 1st):
+${CAT2_JSON}
+
+Products to classify:
+${items}
+
+Rules:
+- Return ONLY a JSON array. No explanation, no markdown, no code fences.
+- Each element: {"cat1": "...", "cat2": "..."}
+- Use EXACT spelling from the lists above.
+- If unsure, use the closest match.
+
+Example output:
+[{"cat1":"Vegetable","cat2":"Leaf vegetable"},{"cat1":"Fruit","cat2":"Fresh Fruit"}]`;
+
+    try {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1000,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+      const data = await resp.json();
+      const text = data.content?.[0]?.text || '[]';
+      const clean = text.replace(/```json|```/g, '').trim();
+      const cats = JSON.parse(clean);
+      cats.forEach((c, j) => {
+        if (i + j < rows.length) {
+          rows[i + j]['Category_1st (Required)'] = c.cat1 || 'Vegetable';
+          rows[i + j]['Category_2nd (Required)'] = c.cat2 || 'Others';
+        }
+      });
+      log(`  배치 ${Math.floor(i/BATCH)+1} 완료 (${Math.min(i+BATCH, rows.length)}/${rows.length})`, 'dim');
+    } catch(e) {
+      log(`  ⚠ 배치 ${Math.floor(i/BATCH)+1} 실패: ${e.message}`, 'warn');
+    }
+  }
 }
 
 // Bug 4 helper: convert VAT flag text (Korean/Vietnamese) to numeric %
@@ -1107,6 +1455,9 @@ function convert() {
       outRow['Selling VAT (Required)'] = sv !== '' && sv !== undefined ? parseVatValue(sv) : 0;
       const suv = outRow["Supplier's VAT"];
       if (suv !== '' && suv !== undefined) outRow["Supplier's VAT"] = parseVatValue(suv);
+      // Step 3: UoM 자동 정규화 (VN → Oda 표준)
+      const rawUom = outRow['UoM'];
+      if (rawUom) outRow['UoM'] = normalizeUom(rawUom);
     }
 
     // Bug 3 fix: ensure all required partner fields have fallback defaults
