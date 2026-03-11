@@ -1523,10 +1523,10 @@ function convert() {
 
   log(`✓ Done! File ready to download.`, 'ok');
 
-  return { url, name: outName, rows: converted };
+  return { url, name: outName, rows: outputRows, count: converted };
 }
 
-function showResult({ url, name, rows }) {
+function showResult({ url, name, count }) {
   const box = document.getElementById('resultBox');
   box.style.display = 'flex';
   box.innerHTML = `
@@ -1534,7 +1534,7 @@ function showResult({ url, name, rows }) {
       <div class="result-icon">✅</div>
       <div class="result-text">
         <h4>Conversion complete</h4>
-        <p>${rows} rows · ready to import into Oda</p>
+        <p>${count} rows · ready to import into Oda</p>
       </div>
       <a href="${url}" download="${name}" class="download-btn">⬇ Download</a>
     </div>
