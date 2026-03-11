@@ -548,14 +548,10 @@
     </div>
   </header>
 
-  <!-- API Key Input -->
-  <div class="section-label">00 — API Key (for AI features)</div>
-  <div style="margin-bottom:32px">
-    <input type="password" id="apiKeyInput" placeholder="sk-ant-..." 
-           style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-family:'DM Mono',monospace;font-size:12px;outline:none">
-    <p style="font-size:11px;color:var(--text-dimmer);font-family:'DM Mono',monospace;margin-top:6px">
-      ⚠️ Required for AI category classification, address parsing, and UoM conversion
-    </p>
+  <!-- AI Status Badge -->
+  <div style="margin-bottom:24px;display:flex;align-items:center;gap:8px;font-family:'DM Mono',monospace;font-size:11px;color:var(--accent)">
+    <span style="width:8px;height:8px;border-radius:50%;background:var(--accent);display:inline-block;box-shadow:0 0 6px var(--accent)"></span>
+    AI features active — category classification · UoM conversion · address parsing
   </div>
 
   <!-- Step 1: Task Selection -->
@@ -653,23 +649,9 @@ let currentHeaders = [];
 let detectedHeaderRow = 0;
 let fileName = '';
 
-// ─── API Key Helper ───────────────────────────────────────
-function getApiKey() {
-  return document.getElementById('apiKeyInput')?.value?.trim() || localStorage.getItem('oda_api_key') || '';
-}
-
-// Load API Key from localStorage on page load
-window.addEventListener('DOMContentLoaded', () => {
-  const saved = localStorage.getItem('oda_api_key');
-  if (saved) document.getElementById('apiKeyInput').value = saved;
-});
-
-// Save API Key to localStorage on change
-document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('apiKeyInput')?.addEventListener('change', e => {
-    localStorage.setItem('oda_api_key', e.target.value.trim());
-  });
-});
+// ─── AI Proxy Config ──────────────────────────────────────
+const AI_PROXY_URL = 'https://oda-ai-proxy.jinlee0124.workers.dev/';
+function getApiKey() { return 'proxy'; } // API key managed server-side via Cloudflare Worker
 
 // ─── Oda reference data ───────────────────────────────────
 const ODA_CATEGORIES = {
@@ -916,11 +898,6 @@ function findBestSheet() {
 // ─── AI Address Parser ────────────────────────────────────
 // Street Address → Street / Commune/Ward / City 자동 분리
 async function parseAddresses(rows) {
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    log('⚠ API Key 없음 — 주소 파싱 skip', 'warn');
-    return;
-  }
 
   const BATCH = 30;
   for (let i = 0; i < rows.length; i += BATCH) {
@@ -950,15 +927,13 @@ Input: "123 Nguyễn Văn Linh, Phường Tân Mỹ, Quận 7, TP.HCM"
 Output: {"street":"123 Nguyễn Văn Linh","ward":"7 District","city":"Ho Chi Minh City"}`;
 
     try {
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      const resp = await fetch('https://oda-ai-proxy.jinlee0124.workers.dev/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-5',
           max_tokens: 1000,
           messages: [{ role: 'user', content: prompt }]
         })
@@ -1369,11 +1344,6 @@ async function runConvert() {
 
 // ─── AI UoM Normalizer ─────────────────────────────────────
 async function normalizeUomWithAI(rows) {
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    log('⚠ API Key 없음 — UoM 변환 skip', 'warn');
-    return;
-  }
 
   // 매핑 안 된 UoM만 수집 (중복 제거)
   const uniqueUnmapped = [...new Set(
@@ -1394,15 +1364,13 @@ Rules:
 - Best match only, no explanation`;
 
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    const resp = await fetch('https://oda-ai-proxy.jinlee0124.workers.dev/', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-20250514',
+        model: 'claude-haiku-4-5',
         max_tokens: 500,
         messages: [{ role: 'user', content: prompt }]
       })
@@ -1421,11 +1389,6 @@ Rules:
 
 // ─── AI Category Classification ───────────────────────────
 async function classifyCategories(rows) {
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    log('⚠ API Key 없음 — 카테고리 분류 skip', 'warn');
-    return;
-  }
 
   const CAT1_LIST = Object.keys(ODA_CATEGORIES).join(', ');
   const CAT2_JSON = JSON.stringify(ODA_CATEGORIES, null, 2);
@@ -1462,15 +1425,13 @@ Example output:
 [{"cat1":"Vegetable","cat2":"Leaf vegetable"},{"cat1":"Fruit","cat2":"Fresh Fruit"}]`;
 
     try {
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      const resp = await fetch('https://oda-ai-proxy.jinlee0124.workers.dev/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-5',
           max_tokens: 1000,
           messages: [{ role: 'user', content: prompt }]
         })
