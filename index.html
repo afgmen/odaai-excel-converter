@@ -948,21 +948,24 @@ function isVGarden(wb) {
   if (!wb) return false;
   const ws = wb.Sheets[wb.SheetNames[0]];
   const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-  // col2='code'이고 col3에 'name'이 포함된 헤더 행이 있으면 V-Garden
+  // V-Garden 특징: col1='CODE', col2='Name (VN)', col3='English Name'
+  const norm = h => String(h || '').trim().toLowerCase().replace(/\s+/g, ' ');
   return raw.slice(0, 15).some(r =>
-    r.length > 9 &&
-    String(r[2] || '').trim().toLowerCase().includes('code') &&
-    String(r[3] || '').trim().toLowerCase().includes('name')
+    r.length > 8 &&
+    norm(r[1]).includes('code') &&
+    norm(r[2]).includes('name')
   );
 }
 
 function loadVGardenSheet(wb) {
   const ws = wb.Sheets[wb.SheetNames[0]];
   const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  const norm = h => String(h || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  // col0=STT, col1=CODE(SKU), col2=Name(VN), col3=EN, col4=CN, col5=UoM, col6=VAT, col8=Price(July)
   const hIdx = raw.findIndex((r, i) =>
-    i < 15 && r.length > 9 &&
-    String(r[2] || '').trim().toLowerCase().includes('code') &&
-    String(r[3] || '').trim().toLowerCase().includes('name')
+    i < 15 && r.length > 8 &&
+    norm(r[1]).includes('code') &&
+    norm(r[2]).includes('name')
   );
   if (hIdx < 0) return;
 
@@ -979,24 +982,24 @@ function loadVGardenSheet(wb) {
   for (let i = hIdx + 1; i < raw.length; i++) {
     const r = raw[i];
     if (!r || !r.length) continue;
-    if (typeof r[1] !== 'number') continue; // STT가 숫자인 행만
+    if (typeof r[0] !== 'number') continue; // col0=STT가 숫자인 행만
     rows.push({
       'ProductID': '',
-      'SKU': r[2] || '',
+      'SKU': r[1] || '',        // col1 = CODE
       'Barcode': '',
       'Category_1st (Required)': 'Vegetable',
       'Category_2nd (Required)': 'Leaf vegetable',
       'Category_3rd': '',
-      'Product name "Primary language" (Required)': r[3] || '',
-      'Product name "Secondary language"': r[4] || '',
-      'Product name "Additional language"': r[5] || '',
+      'Product name "Primary language" (Required)': r[2] || '',  // col2 = Name(VN)
+      'Product name "Secondary language"': r[3] || '',            // col3 = English Name
+      'Product name "Additional language"': r[4] || '',           // col4 = Chinese Name
       'Source': 'Internal',
       "Supplier's Name": '',
       "Supplier's Price": '',
-      "Supplier's VAT": parseVatValue(r[7]),
-      'Selling Price (Required)': r[9] || '',
+      "Supplier's VAT": parseVatValue(r[6]),   // col6 = VAT
+      'Selling Price (Required)': r[8] || '',   // col8 = July (incl.VAT)
       'Selling VAT (Required)': 0,
-      'UoM': r[6] || '',
+      'UoM': r[5] || '',        // col5 = Unit
       'Origin': ''
     });
   }
