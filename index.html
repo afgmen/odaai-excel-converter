@@ -1377,7 +1377,8 @@ Rules:
     });
     const data = await resp.json();
     const text = data.content?.[0]?.text || '{}';
-    const mapping = JSON.parse(text.replace(/```json|```/g, '').trim());
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    const mapping = JSON.parse(jsonMatch ? jsonMatch[0] : '{}');
     rows.forEach(r => {
       if (r['UoM'] && mapping[r['UoM']]) r['UoM'] = mapping[r['UoM']];
     });
