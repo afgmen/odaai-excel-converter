@@ -728,7 +728,15 @@ function normalizeUom(raw) {
   if (exact) return exact;
   // 숫자 제거 후 매핑 (예: 'Bao 20kg' → 'bao' → 'bag')
   const cleaned = s.toLowerCase().replace(/\s*\d+[.,]?\d*\s*(kg|g|ml|l)?/gi, '').replace(/[\d.,]/g, '').trim();
-  return UOM_MAP[cleaned] || s; // 매핑 없으면 원본 유지
+  // 대소문자 무시 fallback 룩업
+  const cleanedLower = cleaned.toLowerCase();
+  const matchedKey = Object.keys(UOM_MAP).find(k => k.toLowerCase() === cleanedLower);
+  if (matchedKey) return UOM_MAP[matchedKey];
+  // 원본도 대소문자 무시 룩업
+  const rawLower = s.toLowerCase();
+  const rawKey = Object.keys(UOM_MAP).find(k => k.toLowerCase() === rawLower);
+  if (rawKey) return UOM_MAP[rawKey];
+  return s; // 매핑 없으면 원본 유지 → AI가 추가 처리
 }
 
 // ─── Task schema definitions ─────────────────────────────
@@ -906,25 +914,41 @@ async function parseAddresses(rows) {
       .map((r, idx) => `${i + idx + 1}. "${r['Street Address'] || ''}"`)
       .join('\n');
 
-    const prompt = `You are a Vietnamese address parsing assistant for Oda platform.
+    const prompt = `You are a Vietnamese address parsing assistant for Oda B2B platform.
 
-Parse each address into: Street Address, Commune/Ward, and City.
+Parse each Vietnamese address into 3 parts: street, ward (district), and city.
 
 Addresses:
 ${items}
 
-Rules:
-- Return ONLY a JSON array, no markdown, no explanation.
-- Each element: {"street": "...", "ward": "...", "city": "..."}
-- "city" = province or city level (e.g. "Ho Chi Minh City", "Hà Nội", "Bình Dương")
-- "ward" = district level (e.g. "Bình Thạnh District", "Thủ Đức District", "2 District", "7 District")
-- "street" = street name + house number (the most specific part)
-- Common patterns: "Quận X" → "X District", "Huyện X" → "X District", "Thành phố Hồ Chí Minh" → "Ho Chi Minh City"
-- If unclear, best guess based on Vietnamese geography
+Parsing rules:
+- "city": Province or municipality level
+  • "TP.HCM", "TP HCM", "Thành phố Hồ Chí Minh", "TPHCM" → "Ho Chi Minh City"
+  • "Hà Nội", "TP Hà Nội" → "Ha Noi"
+  • "Đà Nẵng" → "Da Nang"
+  • Other provinces: keep full name in Vietnamese (e.g. "Bình Dương", "Đồng Nai")
+- "ward": District/Quận level
+  • "Quận 1" → "District 1", "Quận 7" → "District 7"
+  • "Quận Bình Thạnh" → "Binh Thanh District"
+  • "Huyện Bình Chánh" → "Binh Chanh District"
+  • "TP Thủ Đức" → "Thu Duc City"
+  • If no district info: leave empty ""
+- "street": House number + street name only (remove ward/district/city parts)
+  • Do NOT include Phường/Xã/Quận/Huyện/Tỉnh/Thành phố in street
+  • Keep only the most specific address line
 
-Example:
+Return ONLY a JSON array, no markdown, no code fences, no explanation.
+Each element: {"street": "...", "ward": "...", "city": "..."}
+
+Examples:
 Input: "123 Nguyễn Văn Linh, Phường Tân Mỹ, Quận 7, TP.HCM"
-Output: {"street":"123 Nguyễn Văn Linh","ward":"7 District","city":"Ho Chi Minh City"}`;
+Output: {"street":"123 Nguyễn Văn Linh","ward":"District 7","city":"Ho Chi Minh City"}
+
+Input: "45 Lê Duẩn, Phường Bến Nghé, Quận 1, TP Hồ Chí Minh"
+Output: {"street":"45 Lê Duẩn","ward":"District 1","city":"Ho Chi Minh City"}
+
+Input: "18 Đường số 5, KCN Sóng Thần, Bình Dương"
+Output: {"street":"18 Đường số 5, KCN Sóng Thần","ward":"","city":"Bình Dương"}`;
 
     try {
       const resp = await fetch('https://oda-ai-proxy.jinlee0124.workers.dev/', {
@@ -1355,17 +1379,39 @@ async function normalizeUomWithAI(rows) {
   )];
   if (uniqueUnmapped.length === 0) return;
 
-  const prompt = `Convert these UoM values to match Oda's official UoM list.
+  const prompt = `Convert these UoM values to match Oda's official UoM list exactly.
 
-Oda UoM list: ${ODA_UOM_LIST.join(', ')}
+Oda UoM list (use EXACT spelling): ${ODA_UOM_LIST.join(', ')}
 
 Values to convert:
 ${uniqueUnmapped.map((u,i) => `${i+1}. "${u}"`).join('\n')}
 
+Conversion guidance:
+- Hộp, hop, Box, BOX → box
+- Chai, Bottle, BTL → bottle
+- Lon, Can, CAN → can
+- Kg, KG, KGS, kilogram → kg
+- G, GR, Gram, gram → g
+- Lít, L, Litre, Liters → liter
+- Gói, Pack, PKT → pack
+- Túi, Bịch, Bag, BAG → bag
+- Cái, Piece, PCS, Pcs → piece
+- Hũ, Hủ, Jar → jar
+- Thùng, Carton, CTN, Ctn → carton
+- Khay, Tray → tray
+- Cuộn, Sheet, Roll → sheet
+- Set, SET → set
+- Bình, Jerrycan, Jerry can → jerrycan
+- Bộ, Keg → keg
+- Crate → crate
+- Head → head
+- EA, Each → ea
+- Tấn, Ton → t
+
 Rules:
-- Return ONLY a JSON object: {"original": "converted", ...}
-- Use EXACT spelling from Oda list
-- Best match only, no explanation`;
+- Return ONLY a JSON object: {"original_value": "oda_value", ...}
+- Use EXACT spelling from Oda list (lowercase where applicable)
+- No explanation, no markdown`;
 
   try {
     const resp = await fetch('https://oda-ai-proxy.jinlee0124.workers.dev/', {
@@ -1384,7 +1430,11 @@ Rules:
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     const mapping = JSON.parse(jsonMatch ? jsonMatch[0] : '{}');
     rows.forEach(r => {
-      if (r['UoM'] && mapping[r['UoM']]) r['UoM'] = mapping[r['UoM']];
+      if (r['UoM'] && mapping[r['UoM']]) {
+        const mapped = mapping[r['UoM']];
+        // AI 반환값이 실제 ODA 목록에 있는지 검증
+        r['UoM'] = ODA_UOM_LIST.includes(mapped) ? mapped : r['UoM'];
+      }
     });
     log(`✅ AI UoM 변환 완료`, 'ok');
   } catch(e) {
@@ -1420,14 +1470,30 @@ ${CAT2_JSON}
 Products to classify:
 ${items}
 
+Classification guidance:
+- Meat (beef, pork, chicken, duck, lamb, sausage, ham) → "Meat"
+- Seafood (fish, shrimp, squid, crab, clam, salmon, tuna) → "Seafood"
+- Dairy (milk, cheese, butter, cream, yogurt, whipping cream) → "Dairy & Egg"
+- Eggs → "Dairy & Egg"
+- Fresh vegetables, herbs, leafy greens → "Vegetable"
+- Fresh fruits → "Fruit"
+- Rice, noodles, pasta, flour, bread → "Dried & Processed Food"
+- Cooking oil, sauce, seasoning, spice, condiment → "Condiment & Cooking Ingredient"
+- Soft drinks, juice, water, coffee, tea → "Beverage"
+- Alcohol (beer, wine, spirits) → "Alcoholic Beverage"
+- Frozen items → use Frozen sub-category within the appropriate parent
+- Snacks, candy, confectionery → "Snack & Confectionery"
+- Cleaning, hygiene, disposable products → "Non-food"
+- Flowers, decorative plants → "Vegetable" > "Others"
+
 Rules:
 - Return ONLY a JSON array. No explanation, no markdown, no code fences.
 - Each element: {"cat1": "...", "cat2": "..."}
 - Use EXACT spelling from the lists above.
-- If unsure, use the closest match.
+- Never default to Vegetable unless the product is actually a vegetable.
 
 Example output:
-[{"cat1":"Vegetable","cat2":"Leaf vegetable"},{"cat1":"Fruit","cat2":"Fresh Fruit"}]`;
+[{"cat1":"Meat","cat2":"Beef"},{"cat1":"Seafood","cat2":"Fish"},{"cat1":"Beverage","cat2":"Non- alcoholic beverage"}]`;
 
     try {
       const resp = await fetch('https://oda-ai-proxy.jinlee0124.workers.dev/', {
@@ -1537,6 +1603,10 @@ function convert() {
       // Step 3: UoM 자동 정규화 (VN → Oda 표준)
       const rawUom = outRow['UoM'];
       if (rawUom) outRow['UoM'] = normalizeUom(rawUom);
+      // 정규화 후에도 ODA 목록 외 값이면 빈칸으로 남겨 AI가 처리하도록
+      if (outRow['UoM'] && !ODA_UOM_LIST.includes(outRow['UoM'])) {
+        outRow['_rawUom'] = outRow['UoM']; // AI용 원본 보존
+      }
     }
 
     // Bug 3 fix: ensure all required partner fields have fallback defaults
