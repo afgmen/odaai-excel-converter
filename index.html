@@ -735,8 +735,12 @@ function normalizeUom(raw) {
     const numKey = Object.keys(UOM_MAP).find(k => k.toLowerCase() === unit);
     if (numKey) return UOM_MAP[numKey];
   }
-  // 앞 숫자만 제거 후 매핑 (예: 'Bao 20kg' → 'bao' → 'bag')
-  const cleaned = s.toLowerCase().replace(/^\d+[.,]?\d*\s*/, '').replace(/\s*\d+[.,]?\d*\s*$/g, '').trim();
+  // 앞 숫자만 제거 후 매핑 (예: 'Bao 20kg' → 'bao' → 'bag', 'Gói 100g' → 'gói' → 'pack')
+  const cleaned = s.toLowerCase()
+    .replace(/^\d+[.,]?\d*\s*/, '')                              // strip leading number: "500g" → "g"
+    .replace(/\s+\d+[.,]?\d*\s*[a-zA-ZÀ-ỹ\u1E00-\u1EFF]*$/, '') // strip trailing "20kg", "1.5l", "500g"
+    .replace(/\s*\d+[.,]?\d*\s*$/g, '')                          // strip trailing pure number
+    .trim();
   // 대소문자 무시 fallback 룩업
   const matchedKey = Object.keys(UOM_MAP).find(k => k.toLowerCase() === cleaned);
   if (matchedKey) return UOM_MAP[matchedKey];
@@ -971,13 +975,13 @@ Output: {"street":"18 Đường số 5, KCN Sóng Thần","ward":"","city":"Bìn
       });
       const data = await resp.json();
       const text = data.content?.[0]?.text || '[]';
-      const clean = text.replace(/```json|```/g, '').trim();
-      const parsed = JSON.parse(clean);
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
       parsed.forEach((p, j) => {
         if (i + j < rows.length) {
-          rows[i + j]['Street Address']  = p.street || rows[i + j]['Street Address'];
-          rows[i + j]['Commune/ Ward']   = p.ward   || '';
-          rows[i + j]['City']            = p.city   || '';
+          if (p.street) rows[i + j]['Street Address'] = p.street;
+          if (p.ward)   rows[i + j]['Commune/ Ward']  = p.ward;
+          if (p.city)   rows[i + j]['City']            = p.city;
         }
       });
       log(`  주소 배치 ${Math.floor(i/BATCH)+1} 완료 (${Math.min(i+BATCH, rows.length)}/${rows.length})`, 'dim');
@@ -1428,14 +1432,14 @@ Rules:
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 500,
+        max_tokens: 800,
         messages: [{ role: 'user', content: prompt }]
       })
     });
     const data = await resp.json();
     const text = data.content?.[0]?.text || '{}';
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    const mapping = JSON.parse(jsonMatch ? jsonMatch[0] : '{}');
+    const mapping = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
     rows.forEach(r => {
       if (r['UoM'] && mapping[r['UoM']]) {
         const mapped = mapping[r['UoM']];
@@ -1455,8 +1459,8 @@ async function classifyCategories(rows) {
   const CAT1_LIST = Object.keys(ODA_CATEGORIES).join(', ');
   const CAT2_JSON = JSON.stringify(ODA_CATEGORIES, null, 2);
 
-  // 배치 처리: 100개씩 묶어서 API 호출
-  const BATCH = 100;
+  // 배치 처리: 50개씩 묶어서 API 호출 (100개는 max_tokens 초과 위험)
+  const BATCH = 50;
   for (let i = 0; i < rows.length; i += BATCH) {
     const batch = rows.slice(i, i + BATCH);
     const items = batch.map((r, idx) => {
@@ -1477,30 +1481,31 @@ ${CAT2_JSON}
 Products to classify:
 ${items}
 
-Classification guidance:
-- Meat (beef, pork, chicken, duck, lamb, sausage, ham) → "Meat"
-- Seafood (fish, shrimp, squid, crab, clam, salmon, tuna) → "Seafood"
-- Dairy (milk, cheese, butter, cream, yogurt, whipping cream) → "Dairy & Egg"
-- Eggs → "Dairy & Egg"
-- Fresh vegetables, herbs, leafy greens → "Vegetable"
-- Fresh fruits → "Fruit"
-- Rice, noodles, pasta, flour, bread → "Dried & Processed Food"
-- Cooking oil, sauce, seasoning, spice, condiment → "Condiment & Cooking Ingredient"
-- Soft drinks, juice, water, coffee, tea → "Beverage"
-- Alcohol (beer, wine, spirits) → "Alcoholic Beverage"
-- Frozen items → use Frozen sub-category within the appropriate parent
-- Snacks, candy, confectionery → "Snack & Confectionery"
-- Cleaning, hygiene, disposable products → "Non-food"
-- Flowers, decorative plants → "Vegetable" > "Others"
+Classification guidance (use EXACT cat1 names from the list above):
+- Beef, pork, chicken, duck, lamb, sausage, ham → cat1:"Meat"
+- Fish, shrimp, squid, crab, clam, salmon, tuna, seafood → cat1:"Seafood"
+- Milk, cheese, butter, cream, yogurt, whipping cream → cat1:"Dairy product"
+- Eggs → cat1:"Meat", cat2:"Egg"
+- Fresh/frozen vegetables, herbs, leafy greens, mushrooms → cat1:"Vegetable"
+- Fresh/frozen/dried fruits → cat1:"Fruit"
+- Rice, noodles, pasta, flour, bread, oats, grains → cat1:"Grain"
+- Cooking oil, sauce, vinegar, seasoning, spice, condiment, sugar, salt → cat1:"Ingredient / Seasoning"
+- Soft drinks, juice, water, coffee, tea (ready-to-drink) → cat1:"Beverage"
+- Beer, wine, spirits, alcohol → cat1:"Beverage", cat2:"Alcoholic"
+- Syrup, powder mix, jam, beverage base ingredients → cat1:"Beverage ingredients"
+- Processed/convenience food, ready meals, tofu, instant food → cat1:"Processed Food"
+- Flowers, decorative plants → cat1:"Vegetable", cat2:"Others"
+- Kitchen equipment, utensils → cat1:"Equipment"
+- Paper, stationery, office supplies → cat1:"Stationary"
 
 Rules:
 - Return ONLY a JSON array. No explanation, no markdown, no code fences.
 - Each element: {"cat1": "...", "cat2": "..."}
-- Use EXACT spelling from the lists above.
-- Never default to Vegetable unless the product is actually a vegetable.
+- Use EXACT spelling from the Category 1st and 2nd lists above (copy-paste, do not paraphrase).
+- Never default to "Vegetable" unless the product is actually a vegetable/herb/mushroom.
 
 Example output:
-[{"cat1":"Meat","cat2":"Beef"},{"cat1":"Seafood","cat2":"Fish"},{"cat1":"Beverage","cat2":"Non- alcoholic beverage"}]`;
+[{"cat1":"Meat","cat2":"Beef"},{"cat1":"Seafood","cat2":"Fresh"},{"cat1":"Beverage","cat2":"Non- alcoholic"}]`;
 
     try {
       const resp = await fetch('https://oda-ai-proxy.jinlee0124.workers.dev/', {
@@ -1510,18 +1515,23 @@ Example output:
         },
         body: JSON.stringify({
           model: 'claude-haiku-4-5-20251001',
-          max_tokens: 1000,
+          max_tokens: 2000,
           messages: [{ role: 'user', content: prompt }]
         })
       });
       const data = await resp.json();
       const text = data.content?.[0]?.text || '[]';
-      const clean = text.replace(/```json|```/g, '').trim();
-      const cats = JSON.parse(clean);
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      const cats = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
       cats.forEach((c, j) => {
-        if (i + j < rows.length) {
-          rows[i + j]['Category_1st (Required)'] = c.cat1 || 'Vegetable';
-          rows[i + j]['Category_2nd (Required)'] = c.cat2 || 'Others';
+        if (i + j < rows.length && c.cat1) {
+          // Validate against actual ODA_CATEGORIES keys
+          const validCat1 = ODA_CATEGORIES[c.cat1] ? c.cat1 : null;
+          const validCat2 = validCat1 && ODA_CATEGORIES[validCat1].includes(c.cat2) ? c.cat2 : (validCat1 ? ODA_CATEGORIES[validCat1][0] : null);
+          if (validCat1) {
+            rows[i + j]['Category_1st (Required)'] = validCat1;
+            rows[i + j]['Category_2nd (Required)'] = validCat2;
+          }
         }
       });
       log(`  배치 ${Math.floor(i/BATCH)+1} 완료 (${Math.min(i+BATCH, rows.length)}/${rows.length})`, 'dim');
