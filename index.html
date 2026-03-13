@@ -726,15 +726,22 @@ function normalizeUom(raw) {
   // 이미 Oda 목록에 있으면 그대로 (대소문자 무시)
   const exact = ODA_UOM_LIST.find(u => u.toLowerCase() === s.toLowerCase());
   if (exact) return exact;
-  // 숫자 제거 후 매핑 (예: 'Bao 20kg' → 'bao' → 'bag')
-  const cleaned = s.toLowerCase().replace(/\s*\d+[.,]?\d*\s*(kg|g|ml|l)?/gi, '').replace(/[\d.,]/g, '').trim();
+  // 숫자+단위 복합 패턴 처리: "500g" → "g", "1.5kg" → "kg", "250ml" → "liter"
+  const numUnitMatch = s.match(/^\d+[.,]?\d*\s*([a-zA-ZÀ-ỹ\u1E00-\u1EFF]+)$/);
+  if (numUnitMatch) {
+    const unit = numUnitMatch[1].toLowerCase();
+    const exactUnit = ODA_UOM_LIST.find(u => u === unit);
+    if (exactUnit) return exactUnit;
+    const numKey = Object.keys(UOM_MAP).find(k => k.toLowerCase() === unit);
+    if (numKey) return UOM_MAP[numKey];
+  }
+  // 앞 숫자만 제거 후 매핑 (예: 'Bao 20kg' → 'bao' → 'bag')
+  const cleaned = s.toLowerCase().replace(/^\d+[.,]?\d*\s*/, '').replace(/\s*\d+[.,]?\d*\s*$/g, '').trim();
   // 대소문자 무시 fallback 룩업
-  const cleanedLower = cleaned.toLowerCase();
-  const matchedKey = Object.keys(UOM_MAP).find(k => k.toLowerCase() === cleanedLower);
+  const matchedKey = Object.keys(UOM_MAP).find(k => k.toLowerCase() === cleaned);
   if (matchedKey) return UOM_MAP[matchedKey];
   // 원본도 대소문자 무시 룩업
-  const rawLower = s.toLowerCase();
-  const rawKey = Object.keys(UOM_MAP).find(k => k.toLowerCase() === rawLower);
+  const rawKey = Object.keys(UOM_MAP).find(k => k.toLowerCase() === s.toLowerCase());
   if (rawKey) return UOM_MAP[rawKey];
   return s; // 매핑 없으면 원본 유지 → AI가 추가 처리
 }
@@ -751,7 +758,7 @@ const TASK_SCHEMAS = {
       { oda: 'Category_1st (Required)',                      aliases: ['cat.', 'category 1', 'category1', 'cat1', 'loại 1', 'nhóm 1'],                                                           required: true,  default: 'Vegetable' },
       { oda: 'Category_2nd (Required)',                      aliases: ['category 2', 'category2', 'cat2', 'subcat', 'loại 2', 'nhóm 2'],                                                         required: true,  default: 'Leaf vegetable' },
       { oda: 'Category_3rd',                                 aliases: ['category 3', 'category3', 'cat3'],                                                                                       required: false },
-      { oda: 'Product name "Primary language" (Required)',   aliases: ['tên món', 'tên sản phẩm', 'ten mon', 'product name', 'item name', 'hoa trang trí', 'rau mùi', 'name (vn)', 'tên'],      required: true },
+      { oda: 'Product name "Primary language" (Required)',   aliases: ['tên món', 'tên sản phẩm', 'ten mon', 'product name', 'item name', 'hoa trang trí', 'rau mùi', 'name (vn)', 'tên', 'sản phẩm thay đổi giá', 'san pham'],      required: true },
       { oda: 'Product name "Secondary language"',            aliases: ['english name', 'name en', 'name (en)', 'decorative flowers', 'herbs'],                                                   required: false },
       { oda: 'Product name "Additional language"',           aliases: ['chinese name', 'tên trung', 'additional language'],                                                                      required: false },
       { oda: 'Source',                                       aliases: ['source', 'nguồn gốc xuất xứ'],                                                                                           required: false, default: 'Internal' },
@@ -768,7 +775,7 @@ const TASK_SCHEMAS = {
     outputSheet: 'Partner',
     startRow: 25,
     columns: [
-      { oda: 'Partner Type (required)', aliases: ['type', 'loại'], required: true, default: 'local' },
+      { oda: 'Partner Type (required)', aliases: ['type', 'loại', 'ประเภท', 'partner type'], required: true, default: 'local' },
       { oda: 'Partner Code\n(required)', aliases: ['partner code', 'code', 'mã', 'รหัสลูกค้า/ผู้ขาย'], required: false },
       { oda: 'Role (for linked partner)\n(required)', aliases: ['role'], required: false },
       { oda: 'Partner Name (required)', aliases: ['partner name', 'name', 'ชื่อลูกค้า/ผู้ขาย', 'company name', 'tên', 'ten'], required: true },
