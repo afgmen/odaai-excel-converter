@@ -1354,7 +1354,7 @@ async function runConvert() {
     }
 
     // Step 5: create_partner일 때 AI 주소 파싱 (City / Ward 자동 분리)
-    if (currentTask === 'create_partner') {
+    // task 무관하게 실행 (조건 제거)
       const hasAddr = result.rows.some(r => r['Street Address'] && r['Street Address'] !== '');
       if (hasAddr) {
         log(`▸ AI 주소 파싱 중... (${result.rows.length}개 파트너)`, 'info');
@@ -1444,7 +1444,7 @@ Rules:
       if (r['UoM'] && mapping[r['UoM']]) {
         const mapped = mapping[r['UoM']];
         // AI 반환값이 실제 ODA 목록에 있는지 검증
-        r['UoM'] = ODA_UOM_LIST.includes(mapped) ? mapped : r['UoM'];
+        const _matched = ODA_UOM_LIST.find(u => u.toLowerCase() === mapped.toLowerCase()); r['UoM'] = _matched ? _matched : r['UoM'];
       }
     });
     log(`✅ AI UoM 변환 완료`, 'ok');
@@ -1627,7 +1627,7 @@ function convert() {
     }
 
     // Bug 3 fix: ensure all required partner fields have fallback defaults
-    if (currentTask === 'create_partner') {
+    // task 무관하게 실행 (조건 제거)
       if (!outRow['Partner Type (required)']) outRow['Partner Type (required)'] = 'local';
       if (!outRow['Name of contact (required)'] || outRow['Name of contact (required)'] === '') outRow['Name of contact (required)'] = 'N/A';
       if (!outRow['Position (required)'] || outRow['Position (required)'] === '') outRow['Position (required)'] = 'N/A';
