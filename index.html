@@ -1362,7 +1362,6 @@ async function runConvert() {
         await parseAddresses(result.rows);
         log(`✅ AI 주소 파싱 완료`, 'ok');
       }
-    }
 
     // AI 처리 완료 후 XLSX 재생성 (Category/UoM/Address 결과 반영)
     const wbFinal = XLSX.utils.book_new();
@@ -1635,7 +1634,6 @@ function convert() {
       const phone = outRow['Phone (required)'];
       if (!phone || phone === '') outRow['Phone (required)'] = 'N/A';
       if (!outRow['Email (required)'] || outRow['Email (required)'] === '') outRow['Email (required)'] = 'N/A';
-    }
 
     // Bug 4: VAT text → number for update_pricelist
     if (currentTask === 'update_pricelist') {
